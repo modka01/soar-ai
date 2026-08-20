@@ -1,0 +1,22 @@
+/// <reference types="vite/client" />
+
+declare const __APP_VERSION__: string;
+declare const __BUILD_TIME__: string;
+
+interface ImportMetaEnv {
+  readonly VITE_API_BASE_URL?: string;
+}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+
+declare module '*.jpg' {
+  const src: string;
+  export default src;
+}
+
+declare module '*.svg' {
+  const src: string;
+  export default src;
+}

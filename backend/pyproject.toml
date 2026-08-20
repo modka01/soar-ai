@@ -1,0 +1,84 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soar-ai-backend"
+version = "1.0.0"
+description = "QuantNexa SOAR·AI Platform — backend services"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "uvicorn[standard]>=0.32,<1.0",
+  "gunicorn>=23.0",
+  "pydantic>=2.9,<3.0",
+  "pydantic-settings>=2.6,<3.0",
+  "sqlalchemy[asyncio]>=2.0.36,<3.0",
+  "asyncpg>=0.30",
+  "alembic>=1.14",
+  "greenlet>=3.1",
+  "redis>=5.2",
+  "httpx>=0.28",
+  "anthropic>=0.40",
+  "python-jose[cryptography]>=3.3",
+  "passlib[bcrypt]>=1.7.4",
+  "bcrypt>=4.0,<5.0",
+  "python-multipart>=0.0.18",
+  "structlog>=24.4",
+  "prometheus-client>=0.21",
+  "boto3>=1.35",
+  "pyyaml>=6.0",
+  "tenacity>=9.0",
+  "arq>=0.26",
+  "email-validator>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=6.0",
+  "httpx>=0.28",
+  "aiosqlite>=0.20",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "types-pyyaml",
+  "types-passlib",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["app", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "S"]
+ignore = ["S101", "B008", "RUF012"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S105", "S106", "S311"]
+"app/services/mcp/*" = ["S311"]
+"alembic/*" = ["E501", "N999"]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+warn_redundant_casts = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/db/migrations/*", "*/__init__.py"]

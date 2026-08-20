@@ -1,0 +1,18 @@
+apiVersion: v2
+name: soar-ai
+description: QuantNexa SOAR·AI Platform — agentic security orchestration, automation and response
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - security
+  - soar
+  - siem
+  - incident-response
+  - ai
+home: https://quantnexa.com
+maintainers:
+  - name: QuantNexa Platform Engineering
+    email: platform@quantnexa.com
+annotations:
+  category: Security

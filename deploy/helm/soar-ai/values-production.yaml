@@ -1,0 +1,148 @@
+# ═══════════════════════════════════════════════════════════════
+# Production overlay.
+#
+#   helm upgrade --install soar-ai deploy/helm/soar-ai \
+#     --namespace soar --create-namespace \
+#     -f deploy/helm/soar-ai/values-production.yaml \
+#     --set image.backend.tag=$GIT_SHA \
+#     --set image.frontend.tag=$GIT_SHA
+#
+# Secrets are never in this file. They come from the vault through the
+# External Secrets Operator, or from a Secret created out of band.
+# ═══════════════════════════════════════════════════════════════
+
+image:
+  pullPolicy: IfNotPresent
+
+backend:
+  replicaCount: 4
+  webConcurrency: 6
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "3"
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 4
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 65
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 3
+  # Spread across availability zones so a zone outage cannot take the API down.
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/component: backend
+
+worker:
+  enabled: true
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+frontend:
+  replicaCount: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+ingress:
+  enabled: true
+  className: nginx
+  host: soar.quantnexa.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: 12m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # A SOC console is a high-value target; rate-limit the edge.
+    nginx.ingress.kubernetes.io/limit-rps: "40"
+    nginx.ingress.kubernetes.io/limit-connections: "20"
+  tls:
+    enabled: true
+    secretName: soar-ai-tls
+
+config:
+  environment: production
+  logLevel: INFO
+  logFormat: json
+  corsOrigins: "https://soar.quantnexa.com"
+  trustedHosts: "soar.quantnexa.com"
+  rateLimitPerMinute: 1200
+
+  anthropic:
+    model: claude-sonnet-4-6
+    maxTokens: 2000
+    temperature: "0.1"
+    agentMaxIterations: 8
+
+  rag:
+    # Real embeddings in production; the hashing provider is the air-gapped
+    # fallback, not the default for a connected deployment.
+    embeddingProvider: voyage
+    embeddingDimensions: 1024
+    topK: 5
+    chunkSize: 256
+    chunkOverlap: 50
+
+  aws:
+    region: ap-south-1
+
+  safety:
+    # Left off deliberately. Turn this on only once the approval workflow has
+    # been exercised end to end in staging and the SOC has signed off.
+    allowDestructiveActions: false
+    requireApprovalForContainment: true
+    approvalTimeoutSeconds: 600
+
+secrets:
+  create: false
+  existingSecret: ""
+
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  refreshInterval: 1h
+  remoteKeyPrefix: soar-ai/production
+
+serviceAccount:
+  create: true
+  annotations:
+    # IRSA: AWS calls use a projected token, so no static keys are stored.
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/soar-ai-production
+
+networkPolicy:
+  enabled: true
+  ingressNamespace: ingress-nginx
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    labels:
+      release: prometheus
+
+migrations:
+  enabled: true
+  backoffLimit: 2

@@ -1,0 +1,73 @@
+{{- if .Values.worker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "soar-ai.fullname" . }}-worker
+  labels:
+    {{- include "soar-ai.componentLabels" (dict "root" . "component" "worker") | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicaCount }}
+  revisionHistoryLimit: 3
+  strategy:
+    # Recreate, not RollingUpdate: two schedulers would double every periodic
+    # probe and cloud sync for the duration of the rollout.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "soar-ai.componentSelectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "soar-ai.componentLabels" (dict "root" . "component" "worker") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "soar-ai.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.worker.terminationGracePeriodSeconds }}
+      containers:
+        - name: worker
+          image: {{ include "soar-ai.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- include "soar-ai.commonEnv" . | nindent 12 }}
+            {{- include "soar-ai.secretEnv" . | nindent 12 }}
+          # The scheduler serves no HTTP surface, so liveness is proven by the
+          # process still running its loop rather than by a probe endpoint.
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "pgrep -f app.workers.scheduler > /dev/null"]
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "soar-ai.tmpVolumeMount" . | nindent 12 }}
+      volumes:
+        {{- include "soar-ai.tmpVolume" . | nindent 8 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

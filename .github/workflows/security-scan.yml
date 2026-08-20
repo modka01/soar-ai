@@ -1,0 +1,145 @@
+name: Security scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  schedule:
+    # Weekly, so a newly disclosed CVE in a pinned dependency surfaces even
+    # when nobody has pushed.
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python dependencies (pip-audit)
+        working-directory: backend
+        run: |
+          pip install pip-audit
+          pip install -e .
+          pip-audit --strict --desc || {
+            echo "::warning::pip-audit reported advisories — review before release."
+            exit 0
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Node dependencies (npm audit)
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm audit --audit-level=high || {
+            echo "::warning::npm audit reported high-severity advisories."
+            exit 0
+          }
+
+  code:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Bandit
+        working-directory: backend
+        run: |
+          pip install bandit[toml]
+          # ruff already enforces the S ruleset inline; bandit is the second
+          # opinion and reports rather than blocks.
+          bandit -r app -ll -f txt || true
+
+      - name: CodeQL init
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python,javascript-typescript
+          queries: security-extended
+
+      - name: CodeQL analyse
+        uses: github/codeql-action/analyze@v3
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  containers:
+    name: Container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: backend
+            context: backend
+          - component: frontend
+            context: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.component }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: true
+          tags: soar-scan-${{ matrix.component }}:latest
+          cache-from: type=gha
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: soar-scan-${{ matrix.component }}:latest
+          format: sarif
+          output: trivy-${{ matrix.component }}.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+
+      - name: Upload results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-${{ matrix.component }}.sarif
+          category: trivy-${{ matrix.component }}
+
+      - name: Fail on a fixable critical vulnerability
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: soar-scan-${{ matrix.component }}:latest
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'

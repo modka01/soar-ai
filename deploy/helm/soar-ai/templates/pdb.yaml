@@ -1,0 +1,29 @@
+{{- if .Values.backend.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "soar-ai.fullname" . }}-backend
+  labels:
+    {{- include "soar-ai.componentLabels" (dict "root" . "component" "backend") | nindent 4 }}
+spec:
+  # Keeps the API serving through a node drain — a SOC cannot lose its console
+  # because the cluster is being patched.
+  minAvailable: {{ .Values.backend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "soar-ai.componentSelectorLabels" (dict "root" . "component" "backend") | nindent 6 }}
+{{- end }}
+---
+{{- if .Values.frontend.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "soar-ai.fullname" . }}-frontend
+  labels:
+    {{- include "soar-ai.componentLabels" (dict "root" . "component" "frontend") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.frontend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "soar-ai.componentSelectorLabels" (dict "root" . "component" "frontend") | nindent 6 }}
+{{- end }}

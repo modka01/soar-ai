@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "soar-ai.fullname" . }}-frontend
+  labels:
+    {{- include "soar-ai.componentLabels" (dict "root" . "component" "frontend") | nindent 4 }}
+spec:
+  {{- if not .Values.frontend.autoscaling.enabled }}
+  replicas: {{ .Values.frontend.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "soar-ai.componentSelectorLabels" (dict "root" . "component" "frontend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "soar-ai.componentLabels" (dict "root" . "component" "frontend") | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "soar-ai.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        # The nginx-unprivileged image runs as uid 101.
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      terminationGracePeriodSeconds: {{ .Values.frontend.terminationGracePeriodSeconds }}
+      containers:
+        - name: nginx
+          image: {{ include "soar-ai.frontendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Rendered into the server block by the nginx entrypoint, so the
+            # backend address is configuration rather than a rebuild.
+            - name: API_UPSTREAM
+              value: "{{ include "soar-ai.fullname" . }}-backend:{{ .Values.service.backendPort }}"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+            timeoutSeconds: 4
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 3"]
+          resources:
+            {{- toYaml .Values.frontend.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "soar-ai.tmpVolumeMount" . | nindent 12 }}
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d
+      volumes:
+        {{- include "soar-ai.tmpVolume" . | nindent 8 }}
+        - name: nginx-cache
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: nginx-conf
+          emptyDir:
+            sizeLimit: 4Mi
+      {{- with .Values.frontend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.frontend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.frontend.affinity }}
+      affinity:
+        {{- toYaml .Values.frontend.affinity | nindent 8 }}
+      {{- else }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "soar-ai.componentSelectorLabels" (dict "root" . "component" "frontend") | nindent 20 }}
+      {{- end }}

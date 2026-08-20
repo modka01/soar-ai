@@ -1,0 +1,48 @@
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # The revision suffix gives every release its own job name, so Helm never
+  # tries to mutate an immutable Job spec.
+  name: {{ include "soar-ai.fullname" . }}-migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "soar-ai.componentLabels" (dict "root" . "component" "migrate") | nindent 4 }}
+  annotations:
+    # Runs before any new pod starts, so the schema is never behind the code.
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "soar-ai.componentLabels" (dict "root" . "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "soar-ai.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "soar-ai.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["migrate"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            {{- include "soar-ai.commonEnv" . | nindent 12 }}
+            {{- include "soar-ai.secretEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "soar-ai.tmpVolumeMount" . | nindent 12 }}
+      volumes:
+        {{- include "soar-ai.tmpVolume" . | nindent 8 }}
+{{- end }}

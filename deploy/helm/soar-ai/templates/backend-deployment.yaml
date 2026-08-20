@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "soar-ai.fullname" . }}-backend
+  labels:
+    {{- include "soar-ai.componentLabels" (dict "root" . "component" "backend") | nindent 4 }}
+spec:
+  {{- if not .Values.backend.autoscaling.enabled }}
+  replicas: {{ .Values.backend.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never drop below the current capacity during a rollout — the SOC is
+      # using this console while it deploys.
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      {{- include "soar-ai.componentSelectorLabels" (dict "root" . "component" "backend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "soar-ai.componentLabels" (dict "root" . "component" "backend") | nindent 8 }}
+      annotations:
+        # Roll the pods whenever the rendered configuration changes, so a
+        # settings change does not sit un-applied until the next image bump.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.metrics.enabled }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "soar-ai.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.backend.terminationGracePeriodSeconds }}
+      containers:
+        - name: api
+          image: {{ include "soar-ai.backendImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["api"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: SOAR_WEB_CONCURRENCY
+              value: {{ .Values.backend.webConcurrency | quote }}
+            {{- include "soar-ai.commonEnv" . | nindent 12 }}
+            {{- include "soar-ai.secretEnv" . | nindent 12 }}
+          # Startup probe first: a cold pod may wait on the database, and a
+          # slow start must not be mistaken for a crash.
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            periodSeconds: {{ .Values.backend.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.backend.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: {{ .Values.backend.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: {{ .Values.backend.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.backend.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.backend.probes.readiness.failureThreshold }}
+          lifecycle:
+            preStop:
+              exec:
+                # Let the endpoint removal propagate before gunicorn stops
+                # accepting, so no in-flight request is cut off.
+                command: ["/bin/sh", "-c", "sleep 5"]
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "soar-ai.tmpVolumeMount" . | nindent 12 }}
+      volumes:
+        {{- include "soar-ai.tmpVolume" . | nindent 8 }}
+      {{- with .Values.backend.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.backend.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.backend.affinity }}
+      affinity:
+        {{- toYaml .Values.backend.affinity | nindent 8 }}
+      {{- else }}
+      affinity:
+        podAntiAffinity:
+          # Spread replicas across nodes so one node failure cannot take the
+          # whole API down.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "soar-ai.componentSelectorLabels" (dict "root" . "component" "backend") | nindent 20 }}
+      {{- end }}
+      {{- with .Values.backend.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

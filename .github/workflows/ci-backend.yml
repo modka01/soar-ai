@@ -1,0 +1,167 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/ci-backend.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/ci-backend.yml'
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: backend
+
+env:
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  quality:
+    name: Lint and type check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff lint
+        run: ruff check app tests --output-format=github
+
+      - name: Ruff format
+        run: ruff format --check app tests
+
+      - name: mypy
+        # Advisory: the codebase is progressively typed, and a new inference
+        # edge case must not block a security fix from merging.
+        run: mypy app || true
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: soar
+          POSTGRES_PASSWORD: soar
+          POSTGRES_DB: soar_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U soar"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run the suite
+        env:
+          SOAR_ENVIRONMENT: test
+          SOAR_SECRET_KEY: ci-secret-key-not-a-real-credential
+          SOAR_WEBHOOK_HMAC_SECRET: ci-hmac-not-a-real-credential
+          SOAR_REDIS_URL: ''
+        run: pytest -q --cov=app --cov-report=xml --cov-report=term-missing:skip-covered
+
+      - name: Verify migrations apply against PostgreSQL
+        # SQLite passes in unit tests but hides dialect-specific mistakes; this
+        # step runs the real DDL the production database will see.
+        env:
+          SOAR_DATABASE_URL: postgresql+asyncpg://soar:soar@localhost:5432/soar_test
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+          retention-days: 7
+
+  image:
+    name: Build image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [quality, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          push: false
+          load: true
+          tags: soar-ai-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=ci
+            GIT_SHA=${{ github.sha }}
+
+      - name: Smoke-test the image
+        # Proves the image actually boots and serves — a build that only
+        # compiles can still fail at runtime on a missing shared library.
+        run: |
+          docker run -d --name soar-smoke \
+            -e SOAR_ENVIRONMENT=development \
+            -e SOAR_DATABASE_URL=sqlite+aiosqlite:///./smoke.db \
+            -e SOAR_REDIS_URL= \
+            -e SOAR_SECRET_KEY=smoke-test-key \
+            -e SOAR_DB_WAIT_ATTEMPTS=3 \
+            -p 8000:8000 soar-ai-backend:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8000/health/live >/dev/null 2>&1; then
+              echo "container is serving"
+              curl -fsS http://localhost:8000/health/live
+              docker rm -f soar-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container did not become healthy"
+          docker logs soar-smoke
+          docker rm -f soar-smoke
+          exit 1

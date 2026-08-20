@@ -1,0 +1,124 @@
+name: Deployment artifacts
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'deploy/**'
+      - '.github/workflows/ci-deploy-artifacts.yml'
+  pull_request:
+    paths:
+      - 'deploy/**'
+      - '.github/workflows/ci-deploy-artifacts.yml'
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Lint
+        run: helm lint deploy/helm/soar-ai
+
+      - name: Render with the default values
+        run: |
+          helm template soar-ai deploy/helm/soar-ai \
+            --set secrets.existingSecret=soar-secrets > /tmp/default.yaml
+          echo "rendered $(grep -c '^kind:' /tmp/default.yaml) resources"
+
+      - name: Render with the production values
+        run: |
+          helm template soar-ai deploy/helm/soar-ai \
+            -f deploy/helm/soar-ai/values-production.yaml \
+            --set image.backend.tag=${{ github.sha }} \
+            --set image.frontend.tag=${{ github.sha }} > /tmp/production.yaml
+          echo "rendered $(grep -c '^kind:' /tmp/production.yaml) resources"
+
+      - name: Assert the production safety guard fires
+        # A production release must never be able to inline its own secrets.
+        run: |
+          if helm template soar-ai deploy/helm/soar-ai \
+              --set config.environment=production \
+              --set secrets.create=true >/dev/null 2>&1; then
+            echo "::error::The chart allowed secrets.create in production."
+            exit 1
+          fi
+          echo "guard fires as expected"
+
+      - name: Validate the manifests against the Kubernetes schema
+        uses: instrumenta/kubeval-action@master
+        continue-on-error: true
+        with:
+          files: /tmp/production.yaml
+
+      - name: Assert production hardening is in place
+        run: |
+          fail=0
+          check() {
+            if grep -q "$1" /tmp/production.yaml; then
+              echo "  ✓ $2"
+            else
+              echo "::error::$2 is missing from the production manifests"
+              fail=1
+            fi
+          }
+          check 'runAsNonRoot: true'            'pods run as non-root'
+          check 'readOnlyRootFilesystem: true'  'root filesystem is read-only'
+          check 'allowPrivilegeEscalation: false' 'privilege escalation is blocked'
+          check 'kind: NetworkPolicy'           'network policies are applied'
+          check 'kind: PodDisruptionBudget'     'disruption budgets are set'
+          check 'secretName: soar-ai-tls'       'TLS is configured on the ingress'
+          exit $fail
+
+      - name: Assert no plaintext secret reaches a manifest
+        run: |
+          # Every sensitive value must arrive by secretKeyRef, never inline.
+          if grep -nE '(SOAR_SECRET_KEY|SOAR_ANTHROPIC_API_KEY|SOAR_DATABASE_URL)' /tmp/production.yaml \
+             | grep -q 'value:'; then
+            echo "::error::A secret is being passed as a literal value."
+            grep -nE -A1 '(SOAR_SECRET_KEY|SOAR_ANTHROPIC_API_KEY|SOAR_DATABASE_URL)' /tmp/production.yaml
+            exit 1
+          fi
+          echo "all secrets are injected by reference"
+
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          # SC2086 (word splitting) is intentional where we expand flag lists.
+          shellcheck --severity=warning --exclude=SC2086 \
+            deploy/scripts/*.sh \
+            backend/scripts/*.sh \
+            frontend/scripts/*.sh \
+            backend/docker/entrypoint.sh
+
+      - name: Syntax check
+        run: |
+          for script in deploy/scripts/*.sh backend/scripts/*.sh frontend/scripts/*.sh backend/docker/entrypoint.sh; do
+            bash -n "$script" && echo "  ✓ $script"
+          done
+
+  compose:
+    name: Docker Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate the stack definition
+        run: docker compose -f deploy/docker/docker-compose.yml config --quiet && echo "compose config is valid"

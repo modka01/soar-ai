@@ -1,0 +1,39 @@
+QuantNexa SOAR·AI {{ .Chart.AppVersion }} deployed as "{{ .Release.Name }}" in namespace {{ .Release.Namespace }}.
+
+{{- if .Values.ingress.enabled }}
+
+  Console:  http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}
+  API:      http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/api/v1
+{{- else }}
+
+  No ingress is configured. Reach the console with a port-forward:
+
+    kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "soar-ai.fullname" . }}-frontend 8080:{{ .Values.service.frontendPort }}
+{{- end }}
+
+Check the rollout:
+
+  kubectl rollout status -n {{ .Release.Namespace }} deploy/{{ include "soar-ai.fullname" . }}-backend
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+{{- if not .Values.config.safety.allowDestructiveActions }}
+
+SAFETY: destructive actions are DISABLED. Containment tools (block_ip,
+isolate_host, aws_remediate) execute as dry runs and report what they would
+have done. Enable them only after the approval workflow has been exercised:
+
+  --set config.safety.allowDestructiveActions=true
+{{- else }}
+
+⚠ SAFETY: destructive actions are ENABLED. The agent can change live
+firewalls, isolate endpoints and modify cloud resources — gated by the
+approval workflow{{ if not .Values.config.safety.requireApprovalForContainment }}, which is currently DISABLED. Re-enable it unless you
+have deliberately accepted fully autonomous containment{{ end }}.
+{{- end }}
+
+{{- if and (not .Values.secrets.existingSecret) (not .Values.externalSecrets.enabled) }}
+
+⚠ No secret source is configured. Set `secrets.existingSecret` to a
+pre-created Secret, or enable `externalSecrets` to sync from your vault.
+The API will not start without at least `secret-key` and `database-url`.
+{{- end }}

@@ -1,0 +1,278 @@
+# ═══════════════════════════════════════════════════════════════
+# QuantNexa SOAR·AI — default values.
+#
+# These defaults are safe for a staging cluster. For production,
+# layer values-production.yaml on top:
+#
+#   helm upgrade --install soar-ai deploy/helm/soar-ai \
+#     -f deploy/helm/soar-ai/values-production.yaml
+# ═══════════════════════════════════════════════════════════════
+
+nameOverride: ""
+fullnameOverride: ""
+
+# ── Images ─────────────────────────────────────────────────────
+image:
+  registry: ghcr.io/quantnexa
+  pullPolicy: IfNotPresent
+  # Empty tag falls back to .Chart.AppVersion so a chart bump and an image
+  # bump cannot silently diverge.
+  backend:
+    repository: soar-ai-backend
+    tag: ""
+  frontend:
+    repository: soar-ai-frontend
+    tag: ""
+
+imagePullSecrets: []
+
+# ── Backend API ────────────────────────────────────────────────
+backend:
+  replicaCount: 3
+  # Long-running SSE streams mean a pod must drain slowly; 90s covers the
+  # longest agent turn plus the graceful gunicorn shutdown.
+  terminationGracePeriodSeconds: 90
+  webConcurrency: 4
+
+  resources:
+    requests:
+      cpu: 300m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    # Scale up quickly during an incident storm; scale down slowly so a lull
+    # does not kill pods that are mid-investigation.
+    behavior:
+      scaleUp:
+        stabilizationWindowSeconds: 30
+      scaleDown:
+        stabilizationWindowSeconds: 300
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+
+  probes:
+    liveness:
+      initialDelaySeconds: 20
+      periodSeconds: 20
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readiness:
+      initialDelaySeconds: 8
+      periodSeconds: 10
+      timeoutSeconds: 4
+      failureThreshold: 3
+    startup:
+      periodSeconds: 5
+      failureThreshold: 30
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+# ── Maintenance worker ─────────────────────────────────────────
+worker:
+  enabled: true
+  # Exactly one, deliberately: the scheduler's tasks are idempotent but a
+  # second replica would double every probe and sync with nothing gained.
+  replicaCount: 1
+  terminationGracePeriodSeconds: 40
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ── Frontend console ───────────────────────────────────────────
+frontend:
+  replicaCount: 2
+  terminationGracePeriodSeconds: 30
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 300m
+      memory: 192Mi
+
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ── Migration / seed job ───────────────────────────────────────
+migrations:
+  enabled: true
+  # Runs as a pre-install/pre-upgrade hook so the schema is always ready
+  # before any new pod serves traffic.
+  backoffLimit: 3
+  activeDeadlineSeconds: 900
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
+
+# ── Service ────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  backendPort: 8000
+  frontendPort: 8080
+  annotations: {}
+
+# ── Ingress ────────────────────────────────────────────────────
+ingress:
+  enabled: true
+  className: nginx
+  host: soar.quantnexa.com
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: 12m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    # The agent stream is server-sent events; buffering it would hide the
+    # agent's progress until the run finished.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  tls:
+    enabled: true
+    secretName: soar-ai-tls
+
+# ── Configuration ──────────────────────────────────────────────
+config:
+  environment: production
+  logLevel: INFO
+  logFormat: json
+  corsOrigins: "https://soar.quantnexa.com"
+  trustedHosts: "soar.quantnexa.com"
+  rateLimitPerMinute: 600
+
+  anthropic:
+    model: claude-sonnet-4-6
+    maxTokens: 2000
+    temperature: "0.1"
+    agentMaxIterations: 6
+
+  rag:
+    embeddingProvider: hashing
+    embeddingDimensions: 768
+    topK: 4
+    chunkSize: 256
+    chunkOverlap: 50
+
+  aws:
+    region: ap-south-1
+    accountId: ""
+    roleArn: ""
+
+  n8n:
+    url: "http://n8n:5678"
+
+  # Safety rails. Enabling destructive actions lets the platform change live
+  # firewalls, endpoints and cloud resources — turn it on deliberately, after
+  # the approval workflow has been exercised in staging.
+  safety:
+    allowDestructiveActions: false
+    requireApprovalForContainment: true
+    approvalTimeoutSeconds: 300
+
+# ── Secrets ────────────────────────────────────────────────────
+# Never commit real values. Either point at an existing Secret, or use the
+# External Secrets Operator to sync from your vault.
+secrets:
+  # Name of a pre-created Secret holding every sensitive key.
+  existingSecret: ""
+  # Only used when existingSecret is empty — for a throwaway environment.
+  create: false
+  data: {}
+
+externalSecrets:
+  enabled: false
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  refreshInterval: 1h
+  remoteKeyPrefix: soar-ai
+
+# ── Datastores ─────────────────────────────────────────────────
+# The chart does not run Postgres or Redis; point at managed instances.
+postgresql:
+  # Connection string is read from the secret key `database-url`.
+  existingSecretKey: database-url
+
+redis:
+  existingSecretKey: redis-url
+
+# ── Service account ────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  # On EKS, annotate with the IRSA role so AWS calls need no static keys.
+  annotations: {}
+
+# ── Security hardening ─────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop:
+      - ALL
+
+networkPolicy:
+  enabled: true
+  # Egress the backend needs: DNS, the datastores, and HTTPS to the security
+  # vendors and the Anthropic API.
+  allowedEgressPorts:
+    - 443
+    - 5432
+    - 6379
+    - 5678
+  # Namespace that runs the ingress controller.
+  ingressNamespace: ingress-nginx
+
+# ── Observability ──────────────────────────────────────────────
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}
+
+podAnnotations: {}
+podLabels: {}
