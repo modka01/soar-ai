@@ -81,15 +81,27 @@ estate:
 ## Quick start
 
 ```bash
-cp .env.example .env          # fill in SOAR_SECRET_KEY and SOAR_ANTHROPIC_API_KEY
-docker compose -f deploy/docker/docker-compose.yml up -d
+make up        # creates .env, generates secrets and the admin password, starts the stack
 ```
 
 Console at http://localhost:8080, API docs at http://localhost:8000/docs.
 
-Set `SOAR_BOOTSTRAP_ADMIN_PASSWORD` before the first start to create the initial
-administrator; without it the platform starts with no users rather than shipping
-a default credential.
+`make up` runs `make env` first, which creates `.env` from `.env.example` and
+generates `SOAR_SECRET_KEY`, `SOAR_WEBHOOK_HMAC_SECRET` and
+`SOAR_BOOTSTRAP_ADMIN_PASSWORD` if they are blank. The admin email and password
+are printed once and kept in `.env`. To choose your own:
+
+```bash
+ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='Your-Strong-Pass1' make env
+```
+
+The admin is created only while the user table is empty; without a password the
+platform starts with no users rather than shipping a default credential. Add
+`SOAR_ANTHROPIC_API_KEY` to `.env` to enable the agent.
+
+Running compose directly? Pass the root `.env`, since compose otherwise only
+reads `deploy/docker/.env`:
+`docker compose --env-file .env -f deploy/docker/docker-compose.yml up -d`.
 
 ### Developing
 
