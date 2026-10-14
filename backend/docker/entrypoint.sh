@@ -12,9 +12,10 @@ log() { printf '{"event":"entrypoint","role":"%s","message":"%s"}\n' "$ROLE" "$1
 
 wait_for_database() {
   local attempts="${SOAR_DB_WAIT_ATTEMPTS:-30}"
+  local last_error=""
   log "waiting for the database"
   for ((i = 1; i <= attempts; i++)); do
-    if python -c "
+    if last_error="$(python -c "
 import asyncio, sys
 from sqlalchemy import text
 from app.db.session import get_engine
@@ -28,13 +29,15 @@ try:
 except Exception as exc:
     print(exc, file=sys.stderr)
     sys.exit(1)
-" 2>/dev/null; then
+" 2>&1)"; then
       log "database is reachable"
       return 0
     fi
     sleep 2
   done
   log "database did not become reachable in time"
+  # Surface the last failure; a config error looks identical to a down database otherwise.
+  printf '%s\n' "$last_error" >&2
   return 1
 }
 
