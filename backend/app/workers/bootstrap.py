@@ -16,8 +16,13 @@ logger = get_logger(__name__)
 
 
 async def _run() -> dict[str, int]:
-    async with session_scope() as db:
-        return await seed_all(db)
+    try:
+        async with session_scope() as db:
+            return await seed_all(db)
+    finally:
+        # Dispose on the loop that opened the connections, or asyncpg's
+        # teardown runs against a closed loop.
+        await dispose_engine()
 
 
 def main() -> None:
@@ -27,8 +32,6 @@ def main() -> None:
     except Exception as exc:
         logger.exception("bootstrap_failed", error=str(exc))
         sys.exit(1)
-    finally:
-        asyncio.run(dispose_engine())
     logger.info("bootstrap_complete", **result)
 
 

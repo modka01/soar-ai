@@ -1,0 +1,4 @@
+# Reviewed false positives. Format: <commit>:<file>:<rule>:<line>
+# Example command in a script comment, not a credential; the example was later
+# replaced with a placeholder.
+089ba2f54c770df499a499b8a51030cb38331157:deploy/scripts/init-env.sh:generic-api-key:11

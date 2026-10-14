@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, PostgresDsn, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 Environment = Literal["development", "staging", "production", "test"]
+
+# List settings arrive from the environment as either JSON or comma-separated
+# text. NoDecode stops pydantic-settings from JSON-decoding them up front (which
+# rejects CSV) so ``_split_csv`` can handle both forms.
+CsvList = Annotated[list[str], NoDecode]
 
 
 class Settings(BaseSettings):
@@ -42,8 +48,8 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = 60
     refresh_token_ttl_days: int = 14
     webhook_hmac_secret: str = Field(default_factory=lambda: secrets.token_hex(32))
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
-    trusted_hosts: list[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: CsvList = Field(default_factory=lambda: ["http://localhost:5173"])
+    trusted_hosts: CsvList = Field(default_factory=lambda: ["*"])
     rate_limit_per_minute: int = 600
     bootstrap_admin_email: str = "admin@quantnexa.com"
     bootstrap_admin_password: str | None = None
@@ -111,7 +117,7 @@ class Settings(BaseSettings):
     smtp_user: str | None = None
     smtp_password: str | None = None
     smtp_from: str = "soar@quantnexa.com"
-    critical_recipients: list[str] = Field(default_factory=list)
+    critical_recipients: CsvList = Field(default_factory=list)
 
     # ── Safety rails ──────────────────────────────────────────────────
     allow_destructive_actions: bool = False
@@ -132,7 +138,7 @@ class Settings(BaseSettings):
             if not value:
                 return []
             if value.startswith("["):
-                return value
+                return json.loads(value)
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 

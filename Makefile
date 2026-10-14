@@ -4,11 +4,13 @@
 # ─────────────────────────────────────────────────────────────
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev-backend dev-frontend up down logs \
+.PHONY: help install env dev-backend dev-frontend up down logs \
         lint test build check migrate seed clean \
         deploy-staging deploy-production rollback helm-lint
 
-COMPOSE := docker compose -f deploy/docker/docker-compose.yml
+# Compose only auto-loads .env from the compose file's directory, so point it
+# at the repository-root .env explicitly.
+COMPOSE := docker compose $(if $(wildcard .env),--env-file .env) -f deploy/docker/docker-compose.yml
 BACKEND := backend
 FRONTEND := frontend
 PY := $(BACKEND)/.venv/bin/python
@@ -24,6 +26,9 @@ install: ## Install backend and frontend dependencies
 	cd $(FRONTEND) && npm install --no-audit --no-fund
 	@echo "✓ dependencies installed"
 
+env: ## Create .env and generate secrets + the first admin password
+	./deploy/scripts/init-env.sh
+
 ## ── Local development ──────────────────────────────────────
 
 dev-backend: ## Run the API with reload
@@ -32,8 +37,8 @@ dev-backend: ## Run the API with reload
 dev-frontend: ## Run the console with hot reload
 	cd $(FRONTEND) && npm run dev
 
-up: ## Start the full local stack
-	$(COMPOSE) up -d
+up: env ## Start the full local stack
+	docker compose --env-file .env -f deploy/docker/docker-compose.yml up -d --build
 	@echo "console: http://localhost:8080  ·  api: http://localhost:8000/docs"
 
 down: ## Stop the local stack
