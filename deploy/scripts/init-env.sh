@@ -8,7 +8,7 @@
 # are already set are never touched, so it is safe to re-run.
 #
 #   ./deploy/scripts/init-env.sh
-#   ADMIN_EMAIL=me@example.com ADMIN_PASSWORD='S0me-Strong-Pass' ./deploy/scripts/init-env.sh
+#   ADMIN_EMAIL=you@example.com ADMIN_PASSWORD="$YOUR_PASSWORD" ./deploy/scripts/init-env.sh
 # ─────────────────────────────────────────────────────────────
 set -euo pipefail
 

@@ -92,7 +92,7 @@ generates `SOAR_SECRET_KEY`, `SOAR_WEBHOOK_HMAC_SECRET` and
 are printed once and kept in `.env`. To choose your own:
 
 ```bash
-ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='Your-Strong-Pass1' make env
+ADMIN_EMAIL=you@example.com ADMIN_PASSWORD="$YOUR_PASSWORD" make env   # 12+ characters
 ```
 
 The admin is created only while the user table is empty; without a password the
